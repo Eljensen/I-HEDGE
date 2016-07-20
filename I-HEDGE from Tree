@@ -1,0 +1,172 @@
+#Scripts used for: "I-HEDGE: Determining the optimum complementary sets of taxa for conservation using evolutionary isolation "
+#E. L. Jensen, A. Mooers, A. Caccone, M. A. Russello
+#
+#Scripts modified from Volkmann et al. 2014, and prepared by E. L. Jensen and K. Jensen, 2016
+#Last Updated June 2016
+#
+# This script can be used to calculate I-HEDGE rankings from a tree
+# It requires two input files
+#	1.	A tree in newick format saved as a text file
+#	2.	A tab-delimited text file with the taxon name and probability of extinction for each,
+#		Probability of extinctions must be positive, non-zero numbers less than or equal to 1
+#
+#Declare Function
+
+HED_func=function(clade.matrix,edge.length,tip.label,pext)  {
+
+hed=matrix(nrow=nn)
+rownames(hed)=tip.label
+
+#need to make two clade.matrices right away
+
+for (ii in 1:nn){  #for every tip...
+clade.matrix_1 <- clade.matrix
+pext_1 <- pext
+pext_1$V2[ii] <- 1
+clade.matrix_0 <- clade.matrix
+pext_0 <- pext
+pext_0$V2[ii] <- 0.00001 #need nonzero, background rate
+#substitute pext for 1's
+for (iii in 1:nn) 
+    { clade.matrix_0[,iii] <- clade.matrix_0[,iii]*pext_0$V2[iii]
+ 	  clade.matrix_1[,iii] <- clade.matrix_1[,iii]*pext_1$V2[iii] }
+
+#substitute NAs for the zero entries in clade.matrix
+clade.matrix_0[clade.matrix_0==0]<-NA  
+clade.matrix_1[clade.matrix_1==0]<-NA  
+
+edge.extinction.probabilities_1=vector()
+edge.extinction.probabilities_0=vector()
+
+for (iii in 1:dim(clade.matrix)[1])
+       {edge.extinction.probabilities_1[iii] <- prod(clade.matrix_1[iii,], na.rm=TRUE)
+        edge.extinction.probabilities_0[iii] <- prod(clade.matrix_0[iii,], na.rm=TRUE) }
+survival.probabilities_0 <- round(1- edge.extinction.probabilities_1,2)
+survival.probabilities_1<-  round(1- edge.extinction.probabilities_0, 2)
+
+hed[ii]=sum(survival.probabilities_1*edge.length) - sum(survival.probabilities_0*edge.length)
+
+}
+
+IS=vector("list",1)
+IS[[1]]=hed
+IS
+ }
+
+
+#Declare function readCAIC 
+readCAIC<-function(file) {
+tree <- file
+tpc <- unlist(strsplit(tree, "[\\(\\),;]"))
+tpc=tpc[grep(":",tpc)]
+
+# find the tip and edge labels
+tiplabels=tpc[grep(".:",tpc)]
+edgelabels=tpc[-grep(".:",tpc)]
+edgelabels=c(edgelabels,":0")
+
+# locate the clusters and edges
+tree <- unlist(strsplit(tree, NULL))
+x=which(tree=="(")
+y=which(tree==")")
+v=which(tree==":")
+#these are the locations of the tips
+w=setdiff(v,y+1) 
+
+##Pass through string from left to right locating the paired parenthesis, thus
+## allowing for easy assigment of edge to subtending tips
+#initialize objects (M is the actual clade matrix, while E is vector with associated edge weights)
+j=2 
+k=length(w)+1
+M=matrix(0,length(w)*2-1,length(w))
+E=as.vector(matrix(0,1,length(w)*2-1))
+x=c(x,y[length(y)]+1)
+# Main Pass
+while (length(x)>1)
+{
+if (x[j+1]<y[1])
+{j=j+1
+} else {
+M[k,which(x[j]<w & w<y[1])]=1
+E[k]=strsplit(edgelabels[k-length(w)],"[:]")[[1]][2]
+k=k+1
+y=y[-1]
+x=x[-j]
+j=j-1}
+}
+
+# Assign branch lengths and finished tip names to the tips
+for (i in 1:length(w))
+{M[i,i]=1
+tmp=strsplit(tiplabels[i],"[:]")[[1]]
+E[i]=tmp[2]
+tiplabels[i]=tmp[1]}
+M=list(M,as.numeric(E),tiplabels)
+}
+
+#Main Calculation
+
+TreeFile="tree.txt" #tree in newick format
+ProbExtinctionFile="pext.txt" #file with tip names and p(ext) for the tips as two columns
+
+AllTrees=scan(TreeFile, what="",sep="\n",quiet=TRUE,skip=0,comment.char="#") #newick strings, one tree per line
+AllTrees=unlist(strsplit(AllTrees,"[;]"))
+
+pext=read.table(ProbExtinctionFile, header=FALSE) #ext_prob is a matrix with column 1 (V1)=tip.names and column 2 (V2)= the probabilities of extinction
+
+
+
+##get number of tips
+tpc <- unlist(strsplit(AllTrees[1], "[\\(\\),;]"))
+tpc=tpc[grep(":",tpc)]
+tiplabels=tpc[grep(".:",tpc)]
+nn=length(tiplabels)
+
+###loop through all the trees
+for (i in 1:length(AllTrees))
+{
+p=AllTrees[i]
+B=readCAIC(p) #function at bottom of this script
+
+#order pext to match the input tree
+index=match(B[[3]], pext$V1) 
+
+#if in wrong order, re-order pext
+
+if(!all(index == cummax(index)))
+{
+index=matrix(c(index,index), ncol=2)
+sorted <- pext 
+for (j in 1:ncol(pext)) {sorted[,j] <- pext[,j][index[,j]]}
+pext <- sorted
+}
+
+#Calculate I-HEDGE
+# Create a vector of species already 'saved'
+saved<-c()
+
+# Loop through until all have been 'saved'
+for (z in 1:length(pext[,1])) {
+  # Calculate HED values
+  IS=HED_func(B[[1]],B[[2]],B[[3]], pext)
+
+HED=IS[[1]]
+  
+  # Multiply by original pext to get HEDGE
+  HEDGE=HED*pext[,2]
+
+  # Clear all entries that have been saved, they don't count  
+  for(k in saved) {
+    HEDGE[k]<-0
+  }
+
+  # Find the highest HEDGE
+  print(sprintf("Number saved %2d: %s",z,pext[which.max(HEDGE),1]))
+
+  # Add name to saved list
+  saved <- c(saved,which.max(HEDGE))
+  
+  # Save the species
+  pext[which.max(HEDGE),2]=0.001
+}
+}

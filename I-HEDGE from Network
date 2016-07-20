@@ -1,0 +1,185 @@
+#Scripts used for: "I-HEDGE: Determining the optimum complementary sets of taxa for conservation using evolutionary isolation "
+#E. L. Jensen, A. Mooers, A. Caccone, M. A. Russello
+#
+#Scripts modified from Volkmann et al. 2014, and prepared by E. L. Jensen and K. Jensen, 2016
+#Last Updated June 2016
+#
+# This script can be used to calculate I-HEDGE rankings from a splits network
+# It requires two input files
+#	1.	A nexus file describing the network
+#	2.	A tab-delimited text file with the taxon name and probability of extinction for each,
+#		Probability of extinctions must be positive, non-zero numbers less than or equal to 1
+#		The taxa must appear in the same order as in the nexus file
+#
+# Load library
+#
+library(gdata)
+library(motmot)
+# Declare Function
+#
+NetworksHED<-function(Nexusfile,Probext) {
+  
+  ## Read in complete Nexus file, keep only the splits information
+  CompleteNexus=scan(Nexusfile, what = "", sep = "\n", quiet = TRUE,skip = 0)
+  
+  # Identify beginning of splits block and allocate taxa
+  st=grep("CYCLE",CompleteNexus)
+  taxset=unlist(strsplit(strsplit(CompleteNexus[st],"CYCLE")[[1]][2]," "))
+  taxset=unlist(strsplit(strsplit(strsplit(CompleteNexus[st],"CYCLE")[[1]][2],";")[[1]][1]," "))
+  taxset=as.numeric(taxset[taxset>0])
+  taxset=taxset[!is.na(taxset)]
+  
+  # Identify end of splits block
+  edn=grep("END",CompleteNexus)
+  edn=edn[which(((edn-st)>0))[1]]
+  SplitsNexus=CompleteNexus[(st+2):(edn-2)]
+  
+  # Identify all taxa names
+  st=grep("TAXLABELS",CompleteNexus)
+  edn=grep("END",CompleteNexus)
+  edn=edn[which(((edn-st)>0))[1]]
+  NamesNexus=CompleteNexus[(st+1):(edn-2)]
+  
+  ## Check to see if the split system is circular
+  Names=matrix(0,length(NamesNexus),2)
+  for (i in 1:length(NamesNexus)) {
+    number=strsplit(strsplit(strsplit(NamesNexus[i]," ")[[1]][1],"\\[")[[1]][2],"\\]")[[1]][1]
+    name=strsplit(NamesNexus[i]," ")[[1]][2]
+    name=strsplit(name,"'")[[1]][2]
+    Names[i,1]=name
+    Names[i,2]=number
+  }
+  
+  TaxaNotInCycle=setdiff(as.numeric(Names[,2]),taxset)
+  
+  if (!length(TaxaNotInCycle)==0) {
+    taxset=c(taxset,TaxaNotInCycle)
+  }
+  
+  ## Transform data from the splits block to manipulable, array form
+  SplitsNexus=strsplit(SplitsNexus,"\t")
+  SplitsArray=matrix(0,length(SplitsNexus),3)
+  M=matrix(0,length(SplitsNexus),length(taxset))
+  
+  for (i in 1:length(SplitsNexus)) {
+    tmp=SplitsNexus[[i]]
+    sa1=strsplit(tmp[1],"[=]")[[1]][2]
+    sa1=strsplit(sa1,"]")[[1]][1]
+    sa2=as.numeric(tmp[2])
+    sa3=unlist(strsplit(tmp[3],"[ ,]"))
+    sa3=as.numeric(sa3[sa3>0])
+    SplitsArray[i,1]=as.numeric(sa1)
+    SplitsArray[i,2]=sa2
+    tmp2=intersect(taxset,sa3)
+    SplitsArray[i,3]=length(tmp2)
+    M[i,tmp2]=1
+  }
+  
+  ## Read in and allocate probability of extinction values
+  HED=as.vector(matrix(0,1,length(taxset)))
+  n=length(HED)
+  p=rep(0,n)
+  
+  for (i in 1:n) {
+    tmp=Names[i,1]  
+    p[i]=as.numeric(Probext[grep(tmp,Probext[,1]),2])
+  }
+  
+  ##Compute HED values
+  
+  # the first taxa
+  HED=as.vector(matrix(0,1,length(taxset)))
+  for (i in 1:(dim(M)[1])) {
+    if (M[i,taxset[1]]==1) {
+      tmp=which(M[i,]==1)
+      S=prod(p[tmp])/p[taxset[1]]
+      S_=prod(p[-tmp])
+      HED[1]=HED[1]+S*(1-S_)*SplitsArray[i,2]
+    } else {
+      tmp=which(M[i,]==1)
+      S_=prod(p[tmp])
+      S=prod(p[-tmp])/p[taxset[1]]
+      HED[1]=HED[1]+S*(1-S_)*SplitsArray[i,2]
+    }
+  }
+  
+  # all other taxa
+  for (i in 2:n){
+    factmult=(p[taxset[(i-1)]]/p[taxset[i]])
+    HED[i]=HED[(i-1)]*factmult
+    enter=which((M[,taxset[(i-1)]]-M[,taxset[i]])==1)
+    leave=which((M[,taxset[(i-1)]]-M[,taxset[i]])==-1)
+  
+    if (length(enter)==0) {
+    
+    } else {
+      for(j in 1:length(enter)){
+        tmp=which(M[enter[j],]==1)
+        S=prod(p[-tmp])/p[taxset[i]]
+        S_=prod(p[tmp])
+        a=S*(1-S_)*SplitsArray[enter[j],2]
+        S_=prod(p[-tmp])
+        S=prod(p[tmp])/p[taxset[(i-1)]]
+        b=S*(1-S_)*SplitsArray[enter[j],2]
+        HED[i]=HED[i]+a-b*factmult
+      }
+    }
+    
+    if (length(leave)==0) {
+    
+    } else {
+      for (k in 1:length(leave)) {
+        tmp=which(M[leave[k],]==1)
+        S=prod(p[-tmp])/p[taxset[(i-1)]]
+        S_=prod(p[tmp])
+        a=S*(1-S_)*SplitsArray[leave[k],2]
+        S_=prod(p[-tmp])
+        S=prod(p[tmp])/p[taxset[i]]
+        b=S*(1-S_)*SplitsArray[leave[k],2]
+        HED[i]=HED[i]+b-a*factmult
+      }
+    }
+  }
+  
+  # Normalize and post-process
+  HED=HED/length(taxset)
+  HED=as.matrix(HED[order(taxset)])
+#  rownames(HED)=Names[,1]
+  
+  return(HED)
+}
+
+#
+# Main Calculation
+#
+Nexusfile<-"nexus.nex"
+ProbExtinctionFile<-"pext.txt"
+
+# Read in and allocate probability of extinction values
+pext<-read.table(ProbExtinctionFile)
+
+# Create a vector of species already 'saved'
+saved<-c()
+
+# Loop through until all have been 'saved'
+for (i in 1:length(pext[,1])) {
+  # Calculate HED values
+  HED<-NetworksHED(Nexusfile, pext)
+  
+  # Multiply by original pext to get HEDGE
+  HEDGE=HED*pext[,2]
+
+  # Clear all entries that have been saved, they don't count  
+  for(j in saved) {
+    HEDGE[j]<-0
+  }
+
+  # Find the highest HEDGE
+  print(sprintf("Number saved %2d: %s",i,pext[which.max(HEDGE),1]))
+
+  # Add name to saved list
+  saved <- c(saved,which.max(HEDGE))
+  
+  # Save the species
+  pext[which.max(HEDGE),2]=0.001
+}
